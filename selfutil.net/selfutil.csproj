@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net4.8;net6.0</TargetFrameworks>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Platforms>AnyCPU</Platforms>
+    <AutoGenerateBindingRedirects>False</AutoGenerateBindingRedirects>
+    <IsPublishable>True</IsPublishable>
+  </PropertyGroup>
+
+</Project>
