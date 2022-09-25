@@ -9,6 +9,7 @@ Usage: selfutil input [output] [Options]
     
     Options:  
      -v , --verbose                                 <show details>  
+     -vv                                            <show very verbose details>  
      -d , --dry-run                                 <dry run>  
      -o , --overwrite                               <overwrite input file when the output path is not specified>  
      -a , --align-size                              <make elf file align size>  

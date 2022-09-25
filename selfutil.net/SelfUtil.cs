@@ -1,16 +1,18 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 
 namespace selfutil
 {
     public class SelfUtil
     {
-        bool verbose;
         bool dryRun;
         bool alignSize;
         bool notPatchFirstSegDup;
         bool notPatchVerSeg;
+        bool verbose;
+        bool verboseV;
         public byte[] data;
         public byte[] save;
         public Self.Header seHead;
@@ -19,13 +21,14 @@ namespace selfutil
         public Elf.Header elfHdr;
         public List<Elf.ProgramHeader> phdrs;
 
-        public SelfUtil(string filePath, bool verbose, bool dryRun, bool alignSize, bool notPatchFirstSegDup, bool notPatchVerSeg)
+        public SelfUtil(string filePath, bool dryRun, bool alignSize, bool notPatchFirstSegDup, bool notPatchVerSeg, bool verbose, bool verboseV)
         {
-            this.verbose = verbose;
             this.dryRun = dryRun;
             this.alignSize = alignSize;
             this.notPatchFirstSegDup = notPatchFirstSegDup;
             this.notPatchVerSeg = notPatchVerSeg;
+            this.verbose = verbose;
+            this.verboseV = verboseV;
 
             data = new byte[] { };
             save = new byte[] { };
@@ -71,7 +74,7 @@ namespace selfutil
                 Console.WriteLine("Invalid Self Magic! (0x{0:X8})\n", seHead.magic);
                 return false;
             }
-            
+
             if (verbose)
                 Console.WriteLine(
                     "   **Self head info**\n" +
@@ -197,10 +200,13 @@ namespace selfutil
 
             Console.WriteLine("\n\nSaveToELF(\"{0}\")\n", savePath);
 
-            Elf.ProgramHeader ph_PT_SCE_VERSION = default, phFirst = default, phLast = default;
+            Elf.ProgramHeader dynamicPH = default, dynlibDataPH = default, sceVersionPH = default, phFirst = default, phLast = default;
             foreach (Elf.ProgramHeader ph in phdrs)
             {
-                if (ph.type_ == Elf.PhdrType.SCE_VERSION) ph_PT_SCE_VERSION = ph;
+                if (ph.type_ == Elf.PhdrType.DYNAMIC) dynamicPH = ph;
+                else if (ph.type_ == Elf.PhdrType.SCE_DYNLIBDATA) dynlibDataPH = ph;
+                else if (ph.type_ == Elf.PhdrType.SCE_VERSION) sceVersionPH = ph;
+
                 if (phFirst.Equals(default) || phFirst.offset == 0 /* try to get away from offset 0 */ ||
                     ph.offset > 0 && ph.offset < phFirst.offset //if the current first ph is not null and its offset is bigger than 0, then replace it only with a smaller ph that its offset is also bigger than 0
                     ) phFirst = ph;
@@ -242,9 +248,82 @@ namespace selfutil
                 }
             }
 
-            if (!notPatchVerSeg && !ph_PT_SCE_VERSION.Equals(default))
+            if (verboseV)
             {
-                Elf.ProgramHeader ph = ph_PT_SCE_VERSION;
+                int dynamicTableCount = (int)dynamicPH.memsz / Elf.sizeDynamic;
+                ulong dynamicTableAddr = dynamicPH.offset;
+                ulong relaTableAddr = dynlibDataPH.offset;
+                ulong symTableAddr = dynlibDataPH.offset;
+                ulong relaTableSize = 0;
+                ulong symTableSize = 0;
+                int relaTableCount = 0;
+                int symTableCount = 0;
+
+                Console.WriteLine("Dynamic offset:{0:X}, SCE_DYNLIBDATA offset:{1:X}", dynamicPH.offset, dynlibDataPH.offset);
+                for (int dIdx = 0; dIdx < dynamicTableCount; dIdx++)
+                {
+                    var dynaBytes = new byte[Elf.sizeDynamic];
+                    Buffer.BlockCopy(save, (int)dynamicPH.offset + (dIdx * Elf.sizeDynamic), dynaBytes, 0, Elf.sizeDynamic);
+                    var dyna = Utils.BytesToStruct<Elf.Dynamic>(dynaBytes);
+
+                    if (dyna.tag == Elf.DTag.SCE_NEEDED_MODULE ||
+                        dyna.tag == Elf.DTag.SCE_IMPORT_LIB ||
+                        dyna.tag == Elf.DTag.SCE_IMPORT_LIB_ATTR ||
+                        dyna.tag == Elf.DTag.SCE_EXPORT_LIB ||
+                        dyna.tag == Elf.DTag.SCE_EXPORT_LIB_ATTR ||
+                        dyna.tag == Elf.DTag.SCE_MODULE_INFO ||
+                        dyna.tag == Elf.DTag.SCE_MODULE_ATTR ||
+                        dyna.tag == Elf.DTag.SCE_FINGERPRINT ||
+                        dyna.tag == Elf.DTag.SCE_ORIGINAL_FILENAME)
+                    {
+                        (ulong id, ulong versionMinor, ulong versionMajor, ulong index) = Utils.ParseSceModuleVersion(dyna.val);
+                        Console.WriteLine(" Tag:{0,-20} id:{1,4} version(Minor:{2} Major:{3}) index:{4,5}", dyna.tag, id, versionMinor, versionMajor, index);
+                    }
+                    else Console.WriteLine(" Tag:{0,-20} Val:{1,20:X}", dyna.tag, dyna.val);
+
+                    if (dyna.tag == Elf.DTag.SCE_JMPREL) relaTableAddr += dyna.val;
+                    else if (dyna.tag == Elf.DTag.SCE_PLTRELSZ) relaTableSize += dyna.val;
+                    else if (dyna.tag == Elf.DTag.SCE_RELASZ) relaTableSize += dyna.val;
+                    else if (dyna.tag == Elf.DTag.SCE_SYMTAB) symTableAddr += dyna.val;
+                    else if (dyna.tag == Elf.DTag.SCE_SYMTABSZ) symTableSize += dyna.val;
+                }
+                symTableCount = (int)symTableSize / Elf.sizeSymbol;
+                ulong dynDataOffset = dynlibDataPH.offset + 16 + 8;
+                var dynlibDataBytes = new byte[symTableAddr - dynDataOffset];
+                Buffer.BlockCopy(save, (int)dynDataOffset, dynlibDataBytes, 0, dynlibDataBytes.Length);
+                var name = Encoding.UTF8.GetString(dynlibDataBytes);
+                var names = name.Split(new char[] { '\0' }, StringSplitOptions.RemoveEmptyEntries);
+
+                var startIdx = names.Length - symTableCount;
+
+                Console.WriteLine("\nFound symbol table, entries: {0}\n", symTableCount);
+
+                for (int sIdx = 0; sIdx < startIdx; sIdx++) Console.WriteLine(names[sIdx]);
+                for (int sIdx = 0; sIdx < symTableCount; sIdx++)
+                {
+                    var symbolBytes = new byte[Elf.sizeSymbol];
+                    var symbolOffset = (int)symTableAddr + sIdx * Elf.sizeSymbol;
+                    Buffer.BlockCopy(save, symbolOffset, symbolBytes, 0, Elf.sizeSymbol);
+                    var sym = Utils.BytesToStruct<Elf.Symbol>(symbolBytes);
+                    Console.WriteLine("nameOffset:{0,6:X} info:{1,-20} {2,-20} other:{3} shndx:{4} value:{5} size:{6}", sym.name, sym.info, names[startIdx + sIdx], sym.other, sym.shndx, sym.value, sym.size);
+                }
+                relaTableCount = (int)relaTableSize / Elf.sizeRela;
+                Console.WriteLine("Found relocation section, entries: {0}", relaTableCount);
+                for (int rIdx = 0; rIdx < relaTableCount; rIdx++)
+                {
+                    var relaBytes = new byte[Elf.sizeRela];
+                    var relaOffset = (int)relaTableAddr + rIdx * Elf.sizeRela;
+                    Buffer.BlockCopy(save, relaOffset, relaBytes, 0, Elf.sizeRela);
+                    var rela = Utils.BytesToStruct<Elf.Relocation>(relaBytes);
+                    if (rela.addend == 0x67052d || rela.offset == 0x67052d) Console.WriteLine("test");
+                    if (rela.sym > 0) Console.WriteLine("offset:{0,6:X} info:{1,-20} sym:{2} {3}", rela.offset, rela.info, rela.sym, names[startIdx + rela.sym]);
+                    //else Console.WriteLine("offset:{0,6:X} info:{1,-20} addend:{2:X}", rela.offset, rela.info, rela.addend);
+                }
+            }
+
+            if (!notPatchVerSeg && !sceVersionPH.Equals(default))
+            {
+                Elf.ProgramHeader ph = sceVersionPH;
                 Console.WriteLine("\npatching version segment");
                 int srcOffset = data.Length - (int)ph.filesz;
                 if (verbose)
@@ -280,7 +359,7 @@ namespace selfutil
                 var firstBytes = new byte[firstLen];
                 Buffer.BlockCopy(save, (int)first, firstBytes, 0, firstBytes.Length);
                 for (ulong firstIdx = 0;
-                    (firstMinOffset == 0 || firstIdx < firstMinOffset) && 
+                    (firstMinOffset == 0 || firstIdx < firstMinOffset) &&
                     firstIdx < (first * (100 - patchFirstSegSafetyPercentage) / 100) && first - firstIdx >= firstLen;
                     firstIdx++)
                 {

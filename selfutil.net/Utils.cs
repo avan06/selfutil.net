@@ -58,5 +58,20 @@ namespace selfutil
         /// <param name="alignment">set alignment value</param>
         /// <returns>aligned value</returns>
         public static ulong AlignUp(ulong val, ulong alignment) => val + (alignment - 1) & ~(alignment - 1);
+
+        /// <summary>
+        /// Tag:SCE_NEEDED_MODULE
+        /// </summary>
+        /// <param name="val"></param>
+        /// <returns></returns>
+        public static (ulong id, ulong versionMinor, ulong versionMajor, ulong index) ParseSceModuleVersion(UInt64 val)
+        {
+            ulong id = val >> 48;
+            ulong versionMinor = (val >> 40) & 0xF;
+            ulong versionMajor = (val >> 32) & 0xF;
+            ulong index = val & 0xFFF;
+
+            return (id, versionMinor, versionMajor, index);
+        }
     }
 }
